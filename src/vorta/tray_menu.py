@@ -1,7 +1,8 @@
 import os
 import sys
 
-from PyQt6.QtGui import QIcon, QImage, QPixmap
+from PyQt6.QtCore import QTimer
+from PyQt6.QtGui import QCursor, QIcon, QImage, QPixmap
 from PyQt6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from vorta.store.models import BackupProfileModel
@@ -13,12 +14,14 @@ class TrayMenu(QSystemTrayIcon):
         QSystemTrayIcon.__init__(self, parent)
         self.app = parent
         self.set_tray_icon()
-        menu = QMenu()
+        self.menu = QMenu()
 
         # Workaround to get `activated` signal on Unity: https://stackoverflow.com/a/43683895/3983708
-        menu.aboutToShow.connect(self.build_menu)
+        self.menu.aboutToShow.connect(self.build_menu)
 
-        self.setContextMenu(menu)
+        if sys.platform != 'darwin':
+            self.setContextMenu(self.menu)
+
         self.build_menu()
 
         self.activated.connect(self.on_activation)
@@ -34,16 +37,38 @@ class TrayMenu(QSystemTrayIcon):
 
         If XDG_CURRENT_DESKTOP isn't set, always open the tray menu (macOS)
         """
-        if reason in [
+        if sys.platform == 'darwin':
+            self._show_menu()
+        elif reason in [
             QSystemTrayIcon.ActivationReason.Trigger,
             QSystemTrayIcon.ActivationReason.DoubleClick,
         ] and os.environ.get('XDG_CURRENT_DESKTOP'):
             self.app.toggle_main_window_visibility()
 
+    def _show_menu(self):
+        """
+        Show the tray menu manually on macOS.
+
+        We deliberately do not use setContextMenu() on macOS: that makes Qt observe
+        the native NSStatusItem menu tracking and read -[NSEvent clickCount] on a
+        non-mouse event, raising NSInternalInconsistencyException and aborting the
+        app on macOS 26+/27. Popping the menu up ourselves avoids that code path.
+        """
+        if self.menu.isVisible():
+            self.menu.hide()
+            return
+        # Pop up one event-loop turn later, so the pending mouse-up that triggered
+        # the activation does not immediately dismiss the menu again.
+        QTimer.singleShot(0, self._popup_menu)
+
+    def _popup_menu(self):
+        icon_rect = self.geometry()
+        self.menu.popup(icon_rect.bottomLeft() if icon_rect.isValid() else QCursor.pos())
+
     def build_menu(self):
         """Build system tray menu based on current state."""
 
-        menu = self.contextMenu()
+        menu = self.menu
         menu.clear()
 
         open_action = menu.addAction(self.tr('Vorta for Borg Backup'))

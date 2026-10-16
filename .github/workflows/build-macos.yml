@@ -78,8 +78,7 @@ jobs:
         xattr -dr com.apple.quarantine ./borg-dir
         mv ./borg-dir dist/Vorta.app/Contents/Resources/
 
-    - name: Codesign executable
-      continue-on-error: false
+    - name: Sign and package app
       working-directory: dist
       env:
         MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
@@ -89,12 +88,18 @@ jobs:
         APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
         APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
       run: |
-        echo $MACOS_CERTIFICATE | base64 --decode > certificate.p12
-        security create-keychain -p 123 build.keychain
-        security default-keychain -s build.keychain
-        security unlock-keychain -p 123 build.keychain
-        security import certificate.p12 -k build.keychain -A -P $MACOS_CERTIFICATE_PWD -T /usr/bin/codesign
-        security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k 123 build.keychain
+        # Import the Developer ID certificate when available. Without it,
+        # packages the app ad-hoc signed (see package/macos-package-app.sh).
+        if [ -n "$MACOS_CERTIFICATE" ]; then
+          echo "$MACOS_CERTIFICATE" | base64 --decode > certificate.p12
+          security create-keychain -p 123 build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p 123 build.keychain
+          security import certificate.p12 -k build.keychain -A -P "$MACOS_CERTIFICATE_PWD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k 123 build.keychain
+        else
+          echo "No signing certificate configured; falling back to ad-hoc signing."
+        fi
         uv run python ../package/fix_app_qt_folder_names_for_codesign.py Vorta.app
         sh ../package/macos-package-app.sh
 
